@@ -269,6 +269,7 @@
                             <th>إجمالي المخزون</th>
                             <th>الكمية المباعة</th>
                             <th>الكمية المتبقية</th>
+                            <th>الكمية التالفة</th>
                             <th>حالة المخزون</th>
                             <th>معدل البيع</th>
                         </tr>
@@ -306,6 +307,7 @@
                             <th>الأيام المتبقية</th>
                             <th>الحالة</th>
                             <th>الكمية المتبقية</th>
+                            <th>الكمية التالفة</th>
                             <th>المخزن</th>
                         </tr>
                     </thead>
@@ -596,57 +598,73 @@
 
         function analyzeData() {
             processedData = {};
-            
-            // تجميع البيانات حسب اسم الدواء وحساب المقاييس
-            pharmaceuticalData.forEach(item => {
-                const drugName = item.drugName;
-                if (!processedData[drugName]) {
-                    processedData[drugName] = {
-                        drugName: drugName,
-                        totalInventory: 0,
-                        quantitySold: 0,
-                        totalRevenue: 0,
-                        totalCost: 0,
-                        stores: new Set(),
-                        categories: new Set(),
-                        expirationDates: [],
-                        items: []
-                    };
-                }
-                
-                processedData[drugName].totalInventory += item.quantity || 0;
-                processedData[drugName].quantitySold += 1; // كل سجل يمثل عملية بيع
-                processedData[drugName].totalRevenue += (item.sellingPrice || 0);
-                processedData[drugName].totalCost += (item.purchasePrice || 0);
-                processedData[drugName].stores.add(item.storeName || 'غير محدد');
-                processedData[drugName].categories.add(item.category || item.item || 'غير محدد');
-                
-                if (item.expirationDate && item.expirationDate instanceof Date) {
-                    processedData[drugName].expirationDates.push({
-                        date: item.expirationDate,
-                        store: item.storeName || 'غير محدد',
-                        category: item.category || item.item || 'غير محدد',
-                        remainingQty: Math.max(0, (item.quantity || 0) - 1)
-                    });
-                }
-                
-                processedData[drugName].items.push(item);
+    
+    // تجميع البيانات حسب اسم الدواء وحساب المقاييس
+    pharmaceuticalData.forEach(item => {
+        const drugName = item.drugName;
+        if (!processedData[drugName]) {
+            processedData[drugName] = {
+                drugName: drugName,
+                totalInventory: 0,
+                quantitySold: 0,
+                remainingQuantity: 0,
+                damagedQuantity: 0,
+                totalRevenue: 0,
+                totalCost: 0,
+                totalLoss: 0,
+                stores: new Set(),
+                categories: new Set(),
+                expirationDates: [],
+                items: []
+            };
+        }
+        
+        // إضافة الكمية الأولية
+        processedData[drugName].totalInventory += item.quantity || 0;
+        processedData[drugName].totalRevenue += (item.sellingPrice || 0);
+        processedData[drugName].totalCost += (item.purchasePrice || 0);
+        processedData[drugName].stores.add(item.storeName || 'غير محدد');
+        processedData[drugName].categories.add(item.category || item.item || 'غير محدد');
+        
+        // التحقق من تاريخ انتهاء الصلاحية
+        const today = new Date();
+        let isExpired = false;
+        if (item.expirationDate && item.expirationDate instanceof Date) {
+            isExpired = item.expirationDate < today;
+            processedData[drugName].expirationDates.push({
+                date: item.expirationDate,
+                store: item.storeName || 'غير محدد',
+                category: item.category || item.item || 'غير محدد',
+                quantity: item.quantity || 0,
+                isExpired: isExpired
             });
+        }
+        
+        // إذا كان منتهي الصلاحية، فهو تالف، وإلا فهو كمية متبقية
+        if (isExpired) {
+            processedData[drugName].damagedQuantity += item.quantity || 0;
+            processedData[drugName].totalLoss += (item.purchasePrice || 0);
+        } else {
+            processedData[drugName].remainingQuantity += item.quantity || 0;
+        }
+        
+        processedData[drugName].items.push(item);
+    });
 
-            // حساب الكميات المتبقية والمقاييس الأخرى
-            Object.keys(processedData).forEach(drugName => {
-                const drug = processedData[drugName];
-                drug.remainingQuantity = Math.max(0, drug.totalInventory - drug.quantitySold);
-                drug.sellThroughRate = drug.totalInventory > 0 ? 
-                    ((drug.quantitySold / drug.totalInventory) * 100).toFixed(1) : 0;
-                drug.profit = drug.totalRevenue - drug.totalCost;
-                drug.profitMargin = drug.totalRevenue > 0 ? 
-                    ((drug.profit / drug.totalRevenue) * 100).toFixed(1) : 0;
-                drug.storeList = Array.from(drug.stores).join(', ');
-                drug.categoryList = Array.from(drug.categories).join(', ');
-            });
+    // حساب الكمية المباعة (الكمية الأولية - الكمية المتبقية - الكمية التالفة)
+    Object.keys(processedData).forEach(drugName => {
+        const drug = processedData[drugName];
+        drug.quantitySold = Math.max(0, drug.totalInventory - drug.remainingQuantity - drug.damagedQuantity);
+        drug.sellThroughRate = drug.totalInventory > 0 ? 
+            ((drug.quantitySold / drug.totalInventory) * 100).toFixed(1) : 0;
+        drug.profit = drug.totalRevenue - drug.totalCost;
+        drug.profitMargin = drug.totalRevenue > 0 ? 
+            ((drug.profit / drug.totalRevenue) * 100).toFixed(1) : 0;
+        drug.storeList = Array.from(drug.stores).join(', ');
+        drug.categoryList = Array.from(drug.categories).join(', ');
+    });
 
-            displayResults();
+    displayResults();
         }
 
         function displayResults() {
@@ -659,8 +677,10 @@
         function displaySummaryMetrics() {
             const container = document.getElementById('summaryMetrics');
             const drugs = Object.values(processedData);
-            
             const totalDrugs = drugs.length;
+            const totalSold = drugs.reduce((sum, drug) => sum + drug.quantitySold, 0);
+            const totalDamaged = drugs.reduce((sum, drug) => sum + drug.damagedQuantity, 0);   
+            const totalLoss = drugs.reduce((sum, drug) => sum + drug.totalLoss, 0);
             const totalRevenue = drugs.reduce((sum, drug) => sum + drug.totalRevenue, 0);
             const totalProfit = drugs.reduce((sum, drug) => sum + drug.profit, 0);
             const averageMargin = totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(1) : 0;
@@ -669,6 +689,18 @@
                 <div class="metric-card">
                     <div class="metric-value">${totalDrugs}</div>
                     <div class="metric-label">إجمالي أنواع الأدوية</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${totalSold}</div>
+                    <div class="metric-label">إجمالي الكمية المباعة</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" style="color: red;">${totalDamaged}</div>
+                    <div class="metric-label">إجمالي الكمية التالفة</div>
+                </div>
+                 <div class="metric-card">
+                   <div class="metric-value" style="color: red;">${totalLoss.toLocaleString()}</div>
+                   <div class="metric-label">إجمالي الخسائر</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">${totalRevenue.toLocaleString()}</div>
@@ -682,27 +714,30 @@
                     <div class="metric-value">${averageMargin}%</div>
                     <div class="metric-label">متوسط هامش الربح</div>
                 </div>
+
             `;
         }
 
         function displayQuantitySoldTable() {
-            const tbody = document.querySelector('#quantitySoldTable tbody');
-            const drugs = Object.values(processedData);
-            
-            tbody.innerHTML = drugs.map(drug => {
-                const stockStatus = getStockStatus(drug.remainingQuantity, drug.totalInventory);
-                return `
-                    <tr>
-                        <td><strong>${drug.drugName}</strong></td>
-                        <td>${drug.categoryList}</td>
-                        <td>${drug.totalInventory}</td>
-                        <td>${drug.quantitySold}</td>
-                        <td>${drug.remainingQuantity}</td>
-                        <td class="${stockStatus.class}">${stockStatus.text}</td>
-                        <td>${drug.sellThroughRate}%</td>
-                    </tr>
-                `;
-            }).join('');
+    const tbody = document.querySelector('#quantitySoldTable tbody');
+    const drugs = Object.values(processedData);
+    
+    tbody.innerHTML = drugs.map(drug => {
+        const remainingColor = drug.remainingQuantity < 10 ? 'color: red; font-weight: bold;' : 'color: green; font-weight: bold;';
+        const stockStatus = getStockStatus(drug.remainingQuantity, drug.totalInventory);
+        return `
+            <tr>
+                <td><strong>${drug.drugName}</strong></td>
+                <td>${drug.categoryList}</td>
+                <td>${drug.totalInventory}</td>
+                <td>${drug.quantitySold}</td>
+                <td style="${remainingColor}">${drug.remainingQuantity}</td>
+                <td style="color: red; font-weight: bold;">${drug.damagedQuantity}</td>
+                <td class="${stockStatus.class}">${stockStatus.text}</td>
+                <td>${drug.sellThroughRate}%</td>
+            </tr>
+        `;
+    }).join('');
         }
 //......................................
         function displayFinancialTable() {
@@ -723,41 +758,50 @@
         }
 
         function displayExpirationTable() {
-            const tbody = document.querySelector('#expirationTable tbody');
-            const expirationData = [];
-            
-            Object.values(processedData).forEach(drug => {
-                drug.expirationDates.forEach(exp => {
-                    if (exp.date) {
-                        const daysUntilExpiry = Math.ceil((exp.date - new Date()) / (1000 * 60 * 60 * 24));
-                        expirationData.push({
-                            drugName: drug.drugName,
-                            category: exp.category,
-                            expirationDate: exp.date.toLocaleDateString(),
-                            daysUntilExpiry: daysUntilExpiry,
-                            status: getExpiryStatus(daysUntilExpiry),
-                            remainingQuantity: exp.remainingQty,
-                            store: exp.store
-                        });
-                    }
+    const tbody = document.querySelector('#expirationTable tbody');
+    const expirationData = [];
+    
+    Object.values(processedData).forEach(drug => {
+        drug.expirationDates.forEach(exp => {
+            if (exp.date) {
+                const daysUntilExpiry = Math.ceil((exp.date - new Date()) / (1000 * 60 * 60 * 24));
+                const status = getExpiryStatus(daysUntilExpiry);
+                const quantity = exp.isExpired ? 0 : exp.quantity;
+                const damagedQty = exp.isExpired ? exp.quantity : 0;
+                
+                expirationData.push({
+                    drugName: drug.drugName,
+                    category: exp.category,
+                    expirationDate: exp.date.toLocaleDateString(),
+                    daysUntilExpiry: daysUntilExpiry,
+                    status: status,
+                    remainingQuantity: quantity,
+                    damagedQuantity: damagedQty,
+                    store: exp.store
                 });
-            });
-            
-            // Sort by days until expiry (ascending)
-            expirationData.sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
-            
-            tbody.innerHTML = expirationData.map(item => `
-                <tr>
-                    <td><strong>${item.drugName}</strong></td>
-                    <td>${item.category}</td>
-                    <td>${item.expirationDate}</td>
-                    <td>${item.daysUntilExpiry}</td>
-                    <td class="${item.status.class}">${item.status.text}</td>
-                    <td>${item.remainingQuantity}</td>
-                    <td>${item.store}</td>
-                </tr>
-            `).join('');
-        }
+            }
+        });
+    });
+    
+    // Sort by days until expiry (ascending)
+    expirationData.sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
+    
+    tbody.innerHTML = expirationData.map(item => {
+        const remainingColor = item.remainingQuantity < 10 && item.remainingQuantity > 0 ? 'color: red; font-weight: bold;' : 'color: green; font-weight: bold;';
+        return `
+            <tr>
+                <td><strong>${item.drugName}</strong></td>
+                <td>${item.category}</td>
+                <td>${item.expirationDate}</td>
+                <td>${item.daysUntilExpiry}</td>
+                <td class="${item.status.class}">${item.status.text}</td>
+                <td style="${remainingColor}">${item.remainingQuantity}</td>
+                <td style="color: red; font-weight: bold;">${item.damagedQuantity}</td>
+                <td>${item.store}</td>
+            </tr>
+        `;
+    }).join('');
+}
 
         function getStockStatus(remaining, total) {
             const percentage = (remaining / total) * 100;
